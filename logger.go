@@ -32,8 +32,8 @@ func (s *Spinner) Start() {
 				case <-s.stopChan:
 					return
 				default:
-					fmt.Print(slogMessage("LOADING", fmt.Sprintf("%s %s\r", frame, s.message)))
-					time.Sleep(75 * time.Millisecond)
+					fmt.Print(slogMessage("LOADING", fmt.Sprintf("%s %s\x1b[2K\r", frame, s.message)))
+					time.Sleep(100 * time.Millisecond)
 				}
 			}
 		}
