@@ -5,8 +5,252 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
+
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
+
+//////////////////////////// OPTIONS SELECTOR ////////////////////////////
+
+var (
+	primaryColor   = lipgloss.Color("#D53F8C")
+	secondaryColor = lipgloss.Color("#9F7AEA")
+	accentColor    = lipgloss.Color("#6B46C1")
+	bgColor        = lipgloss.Color("#1A0B2E")
+	textColor      = lipgloss.Color("#F8F9FA")
+
+	titleStyle        lipgloss.Style
+	selectedItemStyle lipgloss.Style
+	itemStyle         lipgloss.Style
+	footerStyle       lipgloss.Style
+	optionsWrapper    lipgloss.Style
+)
+
+type keyMap struct {
+	Up    key.Binding
+	Down  key.Binding
+	Enter key.Binding
+	Quit  key.Binding
+}
+
+func newKeyMap() keyMap {
+	return keyMap{
+		Up:    key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+		Down:  key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		Enter: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
+		Quit:  key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q/esc", "quit")),
+	}
+}
+
+type option struct {
+	title string
+	desc  string
+}
+
+type model struct {
+	options     []option
+	cursor      int
+	selected    int
+	title       string
+	keys        keyMap
+	choice      string
+	quitting    bool
+	width       int
+	height      int
+	centerItems bool
+}
+
+func updateStyles(width int, centerItems bool) {
+	optionWidth := min(width-8, 60)
+	contentWidth := optionWidth - 2 // Account for border
+
+	titleStyle = lipgloss.NewStyle().
+		Foreground(primaryColor).
+		Background(bgColor).
+		Bold(true).
+		Padding(1, 2).
+		MarginBottom(1).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(secondaryColor)
+
+	if centerItems {
+		titleStyle = titleStyle.Width(optionWidth).Align(lipgloss.Center)
+	}
+
+	baseItemStyle := lipgloss.NewStyle().
+		Padding(1, 2).
+		Margin(0, 1) // Add horizontal margin for border spacing
+
+	selectedItemStyle = baseItemStyle.Copy().
+		Foreground(bgColor).
+		Background(primaryColor).
+		Bold(true)
+
+	itemStyle = baseItemStyle.Copy().
+		Foreground(textColor)
+
+	if centerItems {
+		selectedItemStyle = selectedItemStyle.Width(contentWidth).Align(lipgloss.Center)
+		itemStyle = itemStyle.Width(contentWidth).Align(lipgloss.Center)
+	}
+
+	optionsWrapper = lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(accentColor).
+		Padding(1, 0)
+
+	if centerItems {
+		optionsWrapper = optionsWrapper.Width(optionWidth)
+	}
+
+	footerStyle = lipgloss.NewStyle().
+		Foreground(secondaryColor).
+		Padding(1, 2)
+
+	if centerItems {
+		footerStyle = footerStyle.Width(optionWidth).Align(lipgloss.Center)
+	}
+}
+
+func initialModel(title string, optionsDescs map[string]string, centerItems bool) model {
+	var opts []option
+	for key, value := range optionsDescs {
+		opts = append(opts, option{title: key, desc: value})
+	}
+
+	return model{
+		options:     opts,
+		title:       title,
+		keys:        newKeyMap(),
+		cursor:      0,
+		selected:    -1,
+		centerItems: centerItems,
+	}
+}
+
+// Not for public use, this is to implement an interface
+func (m model) Init() tea.Cmd {
+	return nil
+}
+
+// Not for public use, this is to implement an interface
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		updateStyles(m.width, m.centerItems)
+		return m, nil
+
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, m.keys.Quit):
+			m.quitting = true
+			return m, tea.Quit
+		case key.Matches(msg, m.keys.Up):
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case key.Matches(msg, m.keys.Down):
+			if m.cursor < len(m.options)-1 {
+				m.cursor++
+			}
+		case key.Matches(msg, m.keys.Enter):
+			m.selected = m.cursor
+			m.choice = m.options[m.cursor].title
+			m.quitting = true
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+// Not for public use, this is to implement an interface
+func (m model) View() string {
+	if m.quitting && m.selected != -1 {
+		return fmt.Sprintf("\n✨ You selected: %s ✨\n\n", m.choice)
+	}
+
+	titleContent := titleStyle.Render(m.title)
+	optionsContent := ""
+
+	for i, opt := range m.options {
+		var style lipgloss.Style
+		var descStyle lipgloss.Style
+		text := fmt.Sprintf("  %s", opt.title)
+
+		if m.cursor == i {
+			text = fmt.Sprintf("» %s", opt.title)
+			style = selectedItemStyle
+			descStyle = style.Copy().
+				Foreground(textColor).
+				Background(accentColor).
+				Italic(true)
+		} else {
+			style = itemStyle
+			descStyle = style.Copy().
+				Foreground(secondaryColor).
+				Italic(true)
+		}
+
+		optionsContent += style.Render(text) + "\n"
+		if opt.desc != "" {
+			optionsContent += descStyle.Render(opt.desc) + "\n\n"
+		}
+	}
+
+	optionsSection := optionsWrapper.Render(optionsContent)
+	separator := strings.Repeat("─", max(m.width-8, 60)-4)
+
+	helpText := footerStyle.Render("↑/↓: navigate • enter: select • q/esc: quit")
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		titleContent,
+		optionsSection,
+		"\n"+separator+"\n",
+		helpText,
+	)
+
+	if m.centerItems {
+		return lipgloss.Place(m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			lipgloss.NewStyle().MaxWidth(min(m.width-4, 62)).Render(content),
+		)
+	}
+
+	return lipgloss.NewStyle().Padding(1, 2).Render(content)
+}
+
+// SelectOption displays a selection menu with the given title and options,
+// allowing the user to navigate and select an option. The selected option's
+// title is returned as a string. If no option is selected, an error is returned.
+//
+// Parameters:
+// - title: The title of the selection menu.
+// - optionsDescs: A map where keys are option titles and values are option descriptions.
+// - centerItems: A boolean indicating whether to center the items in the menu.
+//
+// Returns:
+// - string: The choice selected.
+// - error: An error if no option was selected or if there was an issue running the program.
+func SelectOption(title string, optionsDescs map[string]string, centerItems bool) (string, error) {
+	m := initialModel(title, optionsDescs, centerItems)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	finalModel, err := p.Run()
+	if err != nil {
+		return "", err
+	}
+	if m, ok := finalModel.(model); ok && m.selected != -1 {
+		return m.choice, nil
+	}
+	return "", fmt.Errorf("no option was selected")
+}
+
+//////////////////////////// END OPTIONS SELECTOR ////////////////////////////
+
+///////////////////////// SPINNER //////////////////////////////////////
 
 // Spinner represents a loading spinner.
 type Spinner struct {
@@ -46,6 +290,10 @@ func (s *Spinner) Stop() {
 	fmt.Print("\r\n") // Clear the spinner line
 }
 
+/////////////////////////// END SPINNER ///////////////////////////
+
+//////////////////////////// FLAGS ////////////////////////////
+
 // DebugEnabled toggles debug logging.
 var DebugEnabled bool = false
 
@@ -54,6 +302,8 @@ var ColorsEnabled bool = true
 
 // SuppressOutput when true disables all log output.
 var SuppressOutput bool = false
+
+//////////////////////////// END FLAGS ////////////////////////////
 
 // Info logs an info message with any number of arguments.
 func Info(args ...any) {
